@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
-#FINNHUB_API_KEY = "d1jrv9pr01qvg5h0epm0d1jrv9pr01qvg5h0epmg"
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
