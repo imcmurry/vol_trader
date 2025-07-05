@@ -17,14 +17,17 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 def get_finnhub_earnings(api_key, days_ahead=10):
-    target_date = (datetime.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-    url = f"https://finnhub.io/api/v1/calendar/earnings?from={target_date}&to={target_date}&token={api_key}"
+    from_date = datetime.today().strftime("%Y-%m-%d")
+    to_date = (datetime.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={from_date}&to={to_date}&token={api_key}"
+    
     try:
         r = requests.get(url)
         data = r.json().get("earningsCalendar", [])
         return [entry['symbol'] for entry in data if entry.get('symbol')]
     except:
         return []
+
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -112,7 +115,7 @@ def send_email(subject, html):
 
 def main():
     print("starting")
-    tickers = get_finnhub_earnings(FINNHUB_API_KEY)
+    tickers = get_finnhub_earnings(FINNHUB_API_KEY, days_ahead=10)
     print(tickers)
     if not tickers:
         send_email("Earnings Alerts: No Data", "<p>No earnings data found for tomorrow.</p>")
