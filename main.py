@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+#FINNHUB_API_KEY = "d1jrv9pr01qvg5h0epm0d1jrv9pr01qvg5h0epmg"
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -106,16 +107,34 @@ def compute_recommendation(ticker):
     except:
         return None
 
-def send_email(subject, html):
+def send_email(subject, html_body):
+    # 1) Create plain-text fallback
+    plain = "Earnings report attached as HTML. Please enable HTML view in your mail client."
+
+    # 2) Wrap your existing `html_body` inside <html><body>…
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+      <head><meta charset="UTF-8"></head>
+      <body>
+        {html_body}
+      </body>
+    </html>
+    """
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    msg.attach(MIMEText(html, "html"))
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = EMAIL_TO
+
+    # Attach plain text first, then HTML
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(full_html, "html"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+
 
 def format_table(rows, title, color):
     if not rows:
@@ -152,8 +171,10 @@ def main():
     html += format_table(rec, "✅ Recommended Trades", "green")
     html += format_table(consider, "⚠️ Consider Trades", "orange")
     html += format_table(avoid, "❌ Avoided Trades", "red")
-
+    print("\n=== EMAIL HTML OUTPUT ===\n")
+    print(html)
     send_email("📈 Daily Earnings Volatility Report", html)
 
 if __name__ == "__main__":
     main()
+
