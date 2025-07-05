@@ -16,18 +16,20 @@ EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-def get_finnhub_earnings(api_key, days_ahead=10):
+def get_finnhub_earnings(api_key, days_ahead=3):
     from_date = datetime.today().strftime("%Y-%m-%d")
     to_date = (datetime.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={from_date}&to={to_date}&token={api_key}"
-    
     try:
         r = requests.get(url)
         data = r.json().get("earningsCalendar", [])
-        return [entry['symbol'] for entry in data if entry.get('symbol')]
+        return [{
+            "symbol": entry["symbol"],
+            "date": entry.get("date"),
+            "hour": entry.get("hour")
+        } for entry in data if entry.get("symbol")]
     except:
         return []
-
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -58,8 +60,8 @@ def get_current_price(ticker):
 
 def compute_recommendation(ticker):
     try:
-        ticker = ticker.upper()
-        stock = yf.Ticker(ticker)
+        symbol = ticker['symbol']
+        stock = yf.Ticker(symbol)
         if not stock.options:
             return None
         exp_dates = filter_dates(stock.options)
@@ -93,11 +95,13 @@ def compute_recommendation(ticker):
         vol = hist['Volume'].rolling(30).mean().dropna().iloc[-1]
         move = f"{round(straddle / price * 100, 2)}%" if straddle else None
         return {
-            'ticker': ticker,
+            'ticker': symbol,
             'avg_volume': vol >= 1500000,
             'iv30_rv30': ivrv >= 1.25,
             'ts_slope_0_45': slope <= -0.00406,
-            'expected_move': move
+            'expected_move': move,
+            'date': ticker.get('date'),
+            'hour': ticker.get('hour')
         }
     except:
         return None
@@ -113,12 +117,23 @@ def send_email(subject, html):
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
 
+def format_table(rows, title, color):
+    if not rows:
+        return f"<h2 style='color:{color}'>{title}</h2><p>None</p>"
+
+    table = f"<h2 style='color:{color}'>{title}</h2><table border='1' cellpadding='5' cellspacing='0'>"
+    table += "<tr><th>Ticker</th><th>Move</th><th>Earnings Date</th><th>Time</th><th>Failed Filters</th></tr>"
+    for row in rows:
+        time_label = {"bmo": "Before Market Open", "amc": "After Market Close"}.get(row.get('hour'), "N/A")
+        fails = ", ".join(row.get('failed', [])) if row.get('failed') else ""
+        table += f"<tr><td>{row['ticker']}</td><td>{row['expected_move']}</td><td>{row.get('date')}</td><td>{time_label}</td><td>{fails}</td></tr>"
+    table += "</table>"
+    return table
+
 def main():
-    print("starting")
-    tickers = get_finnhub_earnings(FINNHUB_API_KEY, days_ahead=10)
-    print(tickers)
+    tickers = get_finnhub_earnings(FINNHUB_API_KEY, days_ahead=3)
     if not tickers:
-        send_email("Earnings Alerts: No Data", "<p>No earnings data found for tomorrow.</p>")
+        send_email("Earnings Alerts: No Data", "<p>No earnings data found for next few days.</p>")
         return
     rec, consider, avoid = [], [], []
     for t in tickers:
@@ -130,14 +145,14 @@ def main():
         elif r['ts_slope_0_45'] and (r['avg_volume'] or r['iv30_rv30']):
             consider.append(r)
         else:
-            fail_reasons = [k for k, v in r.items() if k != "ticker" and not v]
-            avoid.append((r['ticker'], fail_reasons))
-    html = "<h2>✅ Recommended Trades</h2>"
-    html += "".join(f"<p><b>{r['ticker']}</b> — Expected Move: {r['expected_move']}</p>" for r in rec) or "<p>None</p>"
-    html += "<h2>⚠️ Consider Trades</h2>"
-    html += "".join(f"<p><b>{r['ticker']}</b> — Expected Move: {r['expected_move']}</p>" for r in consider) or "<p>None</p>"
-    html += "<h2>❌ Avoided Trades</h2>"
-    html += "".join(f"<p><b>{t}</b> — Failed: {', '.join(fails)}</p>" for t, fails in avoid) or "<p>None</p>"
+            r['failed'] = [k for k, v in r.items() if k in ['avg_volume', 'iv30_rv30', 'ts_slope_0_45'] and not v]
+            avoid.append(r)
+
+    html = ""
+    html += format_table(rec, "✅ Recommended Trades", "green")
+    html += format_table(consider, "⚠️ Consider Trades", "orange")
+    html += format_table(avoid, "❌ Avoided Trades", "red")
+
     send_email("📈 Daily Earnings Volatility Report", html)
 
 if __name__ == "__main__":
