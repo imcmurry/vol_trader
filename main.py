@@ -16,7 +16,7 @@ EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-def get_finnhub_earnings(api_key, days_ahead=1):
+def get_finnhub_earnings(api_key, days_ahead=7):
     target_date = (datetime.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={target_date}&to={target_date}&token={api_key}"
     try:
