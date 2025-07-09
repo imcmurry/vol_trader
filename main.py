@@ -29,32 +29,69 @@ def get_finnhub_earnings(api_key, days_ahead=1):
 
 def filter_dates(dates):
     today = datetime.today().date()
-    cutoff = today + timedelta(days=45)
-    dates = sorted(datetime.strptime(d, "%Y-%m-%d").date() for d in dates)
-    filtered = [d.strftime("%Y-%m-%d") for d in dates if d >= cutoff]
-    if filtered and filtered[0] == today.strftime("%Y-%m-%d"):
-        return filtered[1:]
-    return filtered
+    cutoff_date = today + timedelta(days=45)
+    
+    sorted_dates = sorted(datetime.strptime(date, "%Y-%m-%d").date() for date in dates)
+
+    arr = []
+    for i, date in enumerate(sorted_dates):
+        if date >= cutoff_date:
+            arr = [d.strftime("%Y-%m-%d") for d in sorted_dates[:i+1]]  
+            break
+    
+    if len(arr) > 0:
+        if arr[0] == today.strftime("%Y-%m-%d"):
+            return arr[1:]
+        return arr
+
+    raise ValueError("No date 45 days or more in the future found.")
 
 
-def yang_zhang(price_data, window=30, trading_periods=252):
+
+def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
     log_ho = (price_data['High'] / price_data['Open']).apply(np.log)
     log_lo = (price_data['Low'] / price_data['Open']).apply(np.log)
     log_co = (price_data['Close'] / price_data['Open']).apply(np.log)
+    
     log_oc = (price_data['Open'] / price_data['Close'].shift(1)).apply(np.log)
+    log_oc_sq = log_oc**2
+    
     log_cc = (price_data['Close'] / price_data['Close'].shift(1)).apply(np.log)
+    log_cc_sq = log_cc**2
+    
     rs = log_ho * (log_ho - log_co) + log_lo * (log_lo - log_co)
-    k = 0.34 / (1.34 + ((window + 1) / (window - 1)))
-    close_vol = log_cc.pow(2).rolling(window).sum() / (window - 1.0)
-    open_vol = log_oc.pow(2).rolling(window).sum() / (window - 1.0)
-    rs_vol = rs.rolling(window).sum() / (window - 1.0)
-    result = (open_vol + k * close_vol + (1 - k) * rs_vol).apply(np.sqrt) * np.sqrt(trading_periods)
-    return result.dropna().iloc[-1]
+    
+    close_vol = log_cc_sq.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
+
+    open_vol = log_oc_sq.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
+
+    window_rs = rs.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
+
+    k = 0.34 / (1.34 + ((window + 1) / (window - 1)) )
+    result = (open_vol + k * close_vol + (1 - k) * window_rs).apply(np.sqrt) * np.sqrt(trading_periods)
+
+    if return_last_only:
+        return result.iloc[-1]
+    else:
+        return result.dropna()
 
 
 def build_term_structure(days, ivs):
-    spline = interp1d(np.array(days), np.array(ivs), kind='linear', fill_value="extrapolate")
-    return lambda dte: float(spline(dte))
+    days = np.array(days)
+    ivs = np.array(ivs)
+
+    sort_idx = days.argsort()
+    days = days[sort_idx]
+    ivs = ivs[sort_idx]
 
 
 def get_current_price(ticker):
@@ -63,83 +100,103 @@ def get_current_price(ticker):
 
 def compute_recommendation(ticker):
     try:
-        ticker = ticker.upper()
-        stock = yf.Ticker(ticker)
-        if not stock.options:
-            return None
-
-        exp_dates = filter_dates(stock.options)
-        if not exp_dates:
-            return None
-
-        chains = {e: stock.option_chain(e) for e in exp_dates}
-        price = get_current_price(stock)
-        if price is None:
-            return None
-
+        ticker = ticker.strip().upper()
+        if not ticker:
+            return "No stock symbol provided."
+        
+        try:
+            stock = yf.Ticker(ticker)
+            if len(stock.options) == 0:
+                raise KeyError()
+        except KeyError:
+            return f"Error: No options found for stock symbol '{ticker}'."
+        
+        exp_dates = list(stock.options)
+        try:
+            exp_dates = filter_dates(exp_dates)
+        except:
+            return "Error: Not enough option data."
+        
+        options_chains = {}
+        for exp_date in exp_dates:
+            options_chains[exp_date] = stock.option_chain(exp_date)
+        
+        try:
+            underlying_price = get_current_price(stock)
+            if underlying_price is None:
+                raise ValueError("No market price found.")
+        except Exception:
+            return "Error: Unable to retrieve underlying stock price."
+        
         atm_iv = {}
-        straddle = None
+        straddle = None 
+        i = 0
+        for exp_date, chain in options_chains.items():
+            calls = chain.calls
+            puts = chain.puts
 
-        for i, (exp, chain) in enumerate(chains.items()):
-            calls, puts = chain.calls, chain.puts
             if calls.empty or puts.empty:
                 continue
 
-            c_idx = (calls['strike'] - price).abs().idxmin()
-            p_idx = (puts['strike'] - price).abs().idxmin()
+            call_diffs = (calls['strike'] - underlying_price).abs()
+            call_idx = call_diffs.idxmin()
+            call_iv = calls.loc[call_idx, 'impliedVolatility']
 
-            call_iv = calls.loc[c_idx, 'impliedVolatility']
-            put_iv = puts.loc[p_idx, 'impliedVolatility']
-            atm_iv[exp] = (call_iv + put_iv) / 2.0
+            put_diffs = (puts['strike'] - underlying_price).abs()
+            put_idx = put_diffs.idxmin()
+            put_iv = puts.loc[put_idx, 'impliedVolatility']
+
+            atm_iv_value = (call_iv + put_iv) / 2.0
+            atm_iv[exp_date] = atm_iv_value
 
             if i == 0:
-                call_bid = calls.loc[c_idx, 'bid']
-                call_ask = calls.loc[c_idx, 'ask']
-                put_bid = puts.loc[p_idx, 'bid']
-                put_ask = puts.loc[p_idx, 'ask']
-
-                if not np.isnan(call_bid) and not np.isnan(call_ask):
+                call_bid = calls.loc[call_idx, 'bid']
+                call_ask = calls.loc[call_idx, 'ask']
+                put_bid = puts.loc[put_idx, 'bid']
+                put_ask = puts.loc[put_idx, 'ask']
+                
+                if call_bid is not None and call_ask is not None:
                     call_mid = (call_bid + call_ask) / 2.0
                 else:
                     call_mid = None
 
-                if not np.isnan(put_bid) and not np.isnan(put_ask):
+                if put_bid is not None and put_ask is not None:
                     put_mid = (put_bid + put_ask) / 2.0
                 else:
                     put_mid = None
 
                 if call_mid is not None and put_mid is not None:
-                    straddle = call_mid + put_mid
+                    straddle = (call_mid + put_mid)
 
+            i += 1
+        
         if not atm_iv:
-            return None
-
+            return "Error: Could not determine ATM IV for any expiration dates."
+        
         today = datetime.today().date()
-        dtes, ivs = [], []
-        for exp, iv in atm_iv.items():
-            days_out = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
-            dtes.append(days_out)
+        dtes = []
+        ivs = []
+        for exp_date, iv in atm_iv.items():
+            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            days_to_expiry = (exp_date_obj - today).days
+            dtes.append(days_to_expiry)
             ivs.append(iv)
+        
+        term_spline = build_term_structure(dtes, ivs)
+        
+        ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
+        
+        price_history = stock.history(period='3mo')
+        iv30_rv30 = term_spline(30) / yang_zhang(price_history)
 
-        spline = build_term_structure(dtes, ivs)
-        slope = (spline(45) - spline(dtes[0])) / (45 - dtes[0])
+        avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
 
-        hist = stock.history(period='3mo')
-        ivrv = spline(30) / yang_zhang(hist)
-        vol = hist['Volume'].rolling(30).mean().dropna().iloc[-1]
+        expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
 
-        move = f"{round(straddle / price * 100, 2)}%" if straddle else None
-
-        return {
-            'ticker': ticker,
-            'avg_volume': vol >= 1500000,
-            'iv30_rv30': ivrv >= 1.25,
-            'ts_slope_0_45': slope <= -0.00406,
-            'expected_move': move
-        }
+        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move} #Check that they are in our desired range (see video)
     except Exception as e:
-        print(f"⚠️ Error processing {ticker}: {e}")
-        return None
+        raise Exception(f'Error occured processing')
+      
 
 
 def send_email(subject, html):
