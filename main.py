@@ -94,6 +94,19 @@ def build_term_structure(days, ivs):
     ivs = ivs[sort_idx]
 
 
+    spline = interp1d(days, ivs, kind='linear', fill_value="extrapolate")
+
+    def term_spline(dte):
+        if dte < days[0]:  
+            return ivs[0]
+        elif dte > days[-1]:
+            return ivs[-1]
+        else:  
+            return float(spline(dte))
+
+    return term_spline
+
+
 def get_current_price(ticker):
     return ticker.history(period='1d')['Close'].iloc[0]
 
@@ -115,7 +128,7 @@ def compute_recommendation(ticker):
         try:
             exp_dates = filter_dates(exp_dates)
         except:
-            return "Error: Not enough option data."
+            return None
         
         options_chains = {}
         for exp_date in exp_dates:
