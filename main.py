@@ -115,7 +115,7 @@ def compute_recommendation(ticker):
     try:
         ticker = ticker.strip().upper()
         if not ticker:
-            return "No stock symbol provided."
+            return None
         
         try:
             stock = yf.Ticker(ticker)
