@@ -122,7 +122,7 @@ def compute_recommendation(ticker):
             if len(stock.options) == 0:
                 raise KeyError()
         except KeyError:
-            return f"Error: No options found for stock symbol '{ticker}'."
+            return None
         
         exp_dates = list(stock.options)
         try:
@@ -139,7 +139,7 @@ def compute_recommendation(ticker):
             if underlying_price is None:
                 raise ValueError("No market price found.")
         except Exception:
-            return "Error: Unable to retrieve underlying stock price."
+            return None
         
         atm_iv = {}
         straddle = None 
@@ -184,7 +184,7 @@ def compute_recommendation(ticker):
             i += 1
         
         if not atm_iv:
-            return "Error: Could not determine ATM IV for any expiration dates."
+            return None
         
         today = datetime.today().date()
         dtes = []
@@ -206,7 +206,14 @@ def compute_recommendation(ticker):
 
         expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
 
-        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move} #Check that they are in our desired range (see video)
+        return {
+    'ticker': ticker,
+    'avg_volume': avg_volume >= 1500000,
+    'iv30_rv30': iv30_rv30 >= 1.25,
+    'ts_slope_0_45': ts_slope_0_45 <= -0.00406,
+    'expected_move': expected_move
+    }
+ #Check that they are in our desired range (see video)
     except Exception as e:
         raise Exception(f'Error occured processing')
       
